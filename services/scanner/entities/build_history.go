@@ -15,6 +15,7 @@ type BuildHistory struct {
 type BuildHistoryList []BuildHistory
 
 func ToABuildHistory(bodyRequest string) (buildHistory *BuildHistoryList, err error) {
-	err = json.Unmarshal([]byte(bodyRequest), &buildHistory)
-	return
+	var result BuildHistoryList
+	err = json.Unmarshal([]byte(bodyRequest), &result)
+	return &result, err
 }

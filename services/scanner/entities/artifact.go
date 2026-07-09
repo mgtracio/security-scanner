@@ -26,13 +26,14 @@ type Artifact struct {
 			Href     string `json:"href"`
 		} `json:"vulnerabilities"`
 	} `json:"addition_links"`
-	Digest     string `json:"digest"`
-	Tags       []Tag `json:"tags"`
+	Digest string `json:"digest"`
+	Tags   []Tag  `json:"tags"`
 }
 
 type Artifacts []Artifact
 
 func ToArtifacts(bodyRequest string) (artifacts *Artifacts, err error) {
-	err = json.Unmarshal([]byte(bodyRequest), &artifacts)
-	return
+	var result Artifacts
+	err = json.Unmarshal([]byte(bodyRequest), &result)
+	return &result, err
 }

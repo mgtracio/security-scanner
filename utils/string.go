@@ -1,9 +1,6 @@
 package utils
 
-import (
-	"fmt"
-	"strings"
-)
+import "strings"
 
 type Key string
 
@@ -17,7 +14,7 @@ func SafeTruncated(str string, v string, safeTruncated string) string {
 	if toPos > len(str) {
 		toPos = len(str)
 	}
-	safeTruncated = fmt.Sprintf("\"%s\"", str[fromPos:toPos])
+	safeTruncated = str[fromPos:toPos]
 	return safeTruncated
 }
 
