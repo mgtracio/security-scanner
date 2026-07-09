@@ -18,6 +18,7 @@ type Repository struct {
 type Repositories []Repository
 
 func ToRepositories(bodyRequest string) (repositories *Repositories, err error) {
-	err = json.Unmarshal([]byte(bodyRequest), &repositories)
-	return
+	var result Repositories
+	err = json.Unmarshal([]byte(bodyRequest), &result)
+	return &result, err
 }

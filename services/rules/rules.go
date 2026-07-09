@@ -1,8 +1,9 @@
 package services
 
 import (
-"bufio"
-"os"
+	"bufio"
+	"os"
+	"strings"
 )
 
 const APIEntriesPath = "./apis/entries"
@@ -14,13 +15,18 @@ func SetEntries(path string) (rules []string, err error) {
 
 func readFile(path string) (lines []string, err error) {
 	file, err := os.Open(path)
-	defer file.Close()
 	if err != nil {
 		return
 	}
+	defer file.Close()
+
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		lines = append(lines, line)
 	}
 	err = scanner.Err()
 	return
