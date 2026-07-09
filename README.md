@@ -1,6 +1,6 @@
 # security-scanner
 
-Harbor scanner for container image metadata that inspects build history entries for configuration mistakes, possible hard-coded secrets, and Harbor vulnerability reports.
+Harbor scanner for container image metadata that inspects build history entries for configuration mistakes, redacted secret indicators, and Harbor vulnerability reports.
 
 The scanner calls the Harbor v2 API, walks projects, repositories, artifacts, build history additions, and vulnerability additions, then writes CSV findings to standard output.
 
@@ -11,7 +11,7 @@ The scanner calls the Harbor v2 API, walks projects, repositories, artifacts, bu
 - `services/http`: HTTP client with timeout and secure TLS defaults.
 - `services/rules`: API entry file loading.
 - `services/url`: Harbor URL normalization.
-- `services/scanner`: Harbor traversal, vulnerability parsing, and CSV finding generation.
+- `services/scanner`: Harbor traversal, bounded repository scanning, secret detection, vulnerability parsing, and CSV finding generation.
 - `services/scanner/entities`: Harbor API response models.
 - `utils`: string matching and safe finding truncation helpers.
 
@@ -65,6 +65,7 @@ Flags:
 - `-insecure-skip-tls-verify`: allow self-signed or otherwise invalid Harbor TLS certificates.
 - `-scan-vulnerabilities`: scan Harbor artifact vulnerability reports. Defaults to `true`.
 - `-min-vulnerability-severity`: minimum vulnerability severity to emit. Supported values are `unknown`, `negligible`, `low`, `medium`, `high`, and `critical`. Defaults to `low`.
+- `-concurrency`: maximum concurrent Harbor repository scans. Defaults to `4`.
 
 Operational messages are written to stderr. CSV findings are written to stdout so shell redirection produces a clean CSV file.
 
@@ -75,7 +76,8 @@ Operational messages are written to stderr. CSV findings are written to stdout s
 - Use `-insecure-skip-tls-verify` only for controlled development or lab Harbor instances with self-signed certificates.
 - Do not commit Harbor credentials or exported scan output containing sensitive findings.
 - Prefer running the scanner with a Harbor account that has read-only access to the projects being assessed.
-- Review and rotate any secret-like values reported in build history. The scanner reports indicators; humans should validate whether each finding is an actual secret.
+- Build-history secret detection is assignment-aware and redacts values before writing CSV output. Findings identify the variable or signal, not the secret value.
+- Review and rotate any secret-like values detected in build history. The scanner reports indicators; humans should validate whether each finding is an actual secret.
 - Treat CVE rows as scanner intelligence from Harbor's configured scanner. Confirm exploitability, package reachability, and available fixes before production remediation.
 
 ## Test coverage
@@ -87,6 +89,8 @@ The current test suite covers:
 - Harbor URL normalization.
 - Scanner traversal through projects, repositories, artifacts, and build history.
 - Harbor vulnerability report parsing and severity filtering.
+- Build-history secret assignment detection, redaction, references, and false-positive reduction.
+- Bounded repository concurrency.
 - CSV-safe finding output.
 - Continuing artifact scanning when Harbor reports unsupported build history.
 

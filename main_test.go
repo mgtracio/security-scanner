@@ -24,6 +24,22 @@ func TestRunRejectsNonPositiveTimeout(t *testing.T) {
 	}
 }
 
+func TestRunRejectsNonPositiveConcurrency(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	err := run([]string{"-base-url", "https://harbor.example.com", "-concurrency", "0"}, strings.NewReader(""), &stdout, &stderr)
+	if err == nil {
+		t.Fatal("expected concurrency validation error")
+	}
+	if !strings.Contains(err.Error(), "concurrency must be positive") {
+		t.Fatalf("error = %q, want concurrency validation", err.Error())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty output", stdout.String())
+	}
+}
+
 func TestRunRejectsEmptyEntriesFile(t *testing.T) {
 	entriesPath := filepath.Join(t.TempDir(), "entries")
 	if err := os.WriteFile(entriesPath, []byte("\n# no entries\n"), 0600); err != nil {

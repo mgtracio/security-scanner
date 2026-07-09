@@ -31,6 +31,7 @@ func run(args []string, in io.Reader, out io.Writer, errOut io.Writer) error {
 	timeout := flags.Duration("timeout", proxy.DefaultTimeout, "HTTP request timeout")
 	minVulnerabilitySeverity := flags.String("min-vulnerability-severity", string(scanner.LowImpact), "minimum vulnerability severity to emit: unknown, negligible, low, medium, high, critical")
 	scanVulnerabilities := flags.Bool("scan-vulnerabilities", true, "scan Harbor artifact vulnerability reports")
+	concurrency := flags.Int("concurrency", scanner.DefaultMaxConcurrency, "maximum concurrent Harbor repository scans")
 
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -51,6 +52,9 @@ func run(args []string, in io.Reader, out io.Writer, errOut io.Writer) error {
 
 	if *timeout <= 0 {
 		return fmt.Errorf("timeout must be positive")
+	}
+	if *concurrency <= 0 {
+		return fmt.Errorf("concurrency must be positive")
 	}
 	severityThreshold, err := scanner.ParseSeverityThreshold(*minVulnerabilitySeverity)
 	if err != nil {
@@ -76,6 +80,7 @@ func run(args []string, in io.Reader, out io.Writer, errOut io.Writer) error {
 	harborScanner := scanner.NewWithConfig(client, out, scanner.Config{
 		MinVulnerabilitySeverity: severityThreshold,
 		ScanVulnerabilities:      *scanVulnerabilities,
+		MaxConcurrency:           *concurrency,
 	})
 
 	for _, path := range apis {

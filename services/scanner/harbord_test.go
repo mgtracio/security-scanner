@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 type fakeResponse struct {
@@ -34,6 +36,47 @@ func (f fakeHTTPClient) Request(url string) (*http.Response, error) {
 		Body:       io.NopCloser(strings.NewReader(response.body)),
 		Header:     make(http.Header),
 	}, nil
+}
+
+type trackingHTTPClient struct {
+	mu        sync.Mutex
+	active    int
+	maxActive int
+	responses map[string]fakeResponse
+	delay     time.Duration
+}
+
+func (t *trackingHTTPClient) Request(url string) (*http.Response, error) {
+	t.mu.Lock()
+	t.active++
+	if t.active > t.maxActive {
+		t.maxActive = t.active
+	}
+	t.mu.Unlock()
+
+	if t.delay > 0 {
+		time.Sleep(t.delay)
+	}
+
+	t.mu.Lock()
+	t.active--
+	t.mu.Unlock()
+
+	response, ok := t.responses[url]
+	if !ok {
+		return nil, fmt.Errorf("unexpected URL %s", url)
+	}
+	return &http.Response{
+		StatusCode: response.status,
+		Body:       io.NopCloser(strings.NewReader(response.body)),
+		Header:     make(http.Header),
+	}, nil
+}
+
+func (t *trackingHTTPClient) MaxActive() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.maxActive
 }
 
 func TestScanEndpointReturnsStatusErrorWithResponse(t *testing.T) {
@@ -87,12 +130,68 @@ func TestProcessBuildWritesCSVFinding(t *testing.T) {
 		"sha256:abc",
 		"v1,latest",
 		"HIGH",
-		"ENV PASSWORD=supersecret",
+		"SECRET_ASSIGNMENT PASSWORD=<redacted>",
 		"PASSWORD",
 		buildHistoryURL.Full,
 	}}
 	if !reflect.DeepEqual(rows, want) {
 		t.Fatalf("CSV rows = %#v, want %#v", rows, want)
+	}
+	if strings.Contains(out.String(), "supersecret") {
+		t.Fatalf("CSV output leaked secret value: %s", out.String())
+	}
+}
+
+func TestProcessBuildDetectsSecretReferenceWithoutValue(t *testing.T) {
+	var out bytes.Buffer
+	scanner := New(nil, &out)
+	registryURL := resource.Parse("https://harbor.example.com", "/api/v2.0/projects")
+	buildHistoryURL := resource.Parse("https://harbor.example.com/api/v2.0/projects/library/repositories/app/artifacts/sha256:abc", "/additions/build_history")
+	response := proxy.HttpResponse{Body: `[{"created_by":"ARG GITHUB_TOKEN"}]`}
+
+	err := scanner.ProcessBuild(
+		response,
+		buildHistoryURL,
+		registryURL,
+		entities.Project{Name: "library"},
+		entities.Repository{Name: "library/app"},
+		entities.Artifact{Digest: "sha256:abc"},
+		[]string{"latest"},
+	)
+	if err != nil {
+		t.Fatalf("ProcessBuild() error = %v", err)
+	}
+
+	rows := readCSVRows(t, out.String())
+	if len(rows) != 1 {
+		t.Fatalf("row count = %d, want 1: %#v", len(rows), rows)
+	}
+	if rows[0][5] != "MEDIUM" || rows[0][6] != "SECRET_REFERENCE GITHUB_TOKEN" || rows[0][7] != "GITHUB_TOKEN" {
+		t.Fatalf("row = %#v, want medium secret reference", rows[0])
+	}
+}
+
+func TestProcessBuildIgnoresSensitiveWordWithoutSecretShape(t *testing.T) {
+	var out bytes.Buffer
+	scanner := New(nil, &out)
+	registryURL := resource.Parse("https://harbor.example.com", "/api/v2.0/projects")
+	buildHistoryURL := resource.Parse("https://harbor.example.com/api/v2.0/projects/library/repositories/app/artifacts/sha256:abc", "/additions/build_history")
+	response := proxy.HttpResponse{Body: `[{"created_by":"RUN echo supersecret"}]`}
+
+	err := scanner.ProcessBuild(
+		response,
+		buildHistoryURL,
+		registryURL,
+		entities.Project{Name: "library"},
+		entities.Repository{Name: "library/app"},
+		entities.Artifact{Digest: "sha256:abc"},
+		[]string{"latest"},
+	)
+	if err != nil {
+		t.Fatalf("ProcessBuild() error = %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("CSV output = %q, want no false-positive finding", out.String())
 	}
 }
 
@@ -200,6 +299,46 @@ func TestProcessArtifactsContinuesWhenBuildHistoryIsUnsupported(t *testing.T) {
 	}
 	if rows[0][3] != "sha256:second" {
 		t.Fatalf("digest field = %q, want sha256:second", rows[0][3])
+	}
+}
+
+func TestProcessArtifactsUsesBoundedRepositoryConcurrency(t *testing.T) {
+	var out bytes.Buffer
+	registryURL := resource.Parse("https://harbor.example.com", "/api/v2.0/projects")
+	repositoriesURL := resource.Parse(registryURL.Full, "/library/repositories")
+	client := &trackingHTTPClient{
+		delay: 25 * time.Millisecond,
+		responses: map[string]fakeResponse{
+			"https://harbor.example.com/api/v2.0/projects/library/repositories/app-a/artifacts": {
+				status: http.StatusOK,
+				body:   `[]`,
+			},
+			"https://harbor.example.com/api/v2.0/projects/library/repositories/app-b/artifacts": {
+				status: http.StatusOK,
+				body:   `[]`,
+			},
+			"https://harbor.example.com/api/v2.0/projects/library/repositories/app-c/artifacts": {
+				status: http.StatusOK,
+				body:   `[]`,
+			},
+		},
+	}
+	scanner := NewWithConfig(client, &out, Config{
+		MinVulnerabilitySeverity: LowImpact,
+		ScanVulnerabilities:      false,
+		MaxConcurrency:           2,
+	})
+
+	response := proxy.HttpResponse{Body: `[{"name":"library/app-a"},{"name":"library/app-b"},{"name":"library/app-c"}]`}
+	if err := scanner.ProcessArtifacts(response, repositoriesURL, registryURL, entities.Project{Name: "library"}); err != nil {
+		t.Fatalf("ProcessArtifacts() error = %v", err)
+	}
+
+	if client.MaxActive() > 2 {
+		t.Fatalf("max concurrent requests = %d, want <= 2", client.MaxActive())
+	}
+	if client.MaxActive() < 2 {
+		t.Fatalf("max concurrent requests = %d, want worker overlap", client.MaxActive())
 	}
 }
 
